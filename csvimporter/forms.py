@@ -1,55 +1,54 @@
-import csv, re
+import datetime, csv
 
-from django import forms
-from django.contrib.contenttypes.models import ContentType
+from django.http import HttpResponseRedirect
+from django.shortcuts import render_to_response, get_object_or_404
 from django.core.files.base import ContentFile
+from django.template import RequestContext
+from django.contrib.admin.views.decorators import staff_member_required
+from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
+from django.core.urlresolvers import reverse
+from django.views.generic.list_detail import object_list, object_detail
 
 from csvimporter.models import CSV
+from csvimporter.forms import CSVForm, CSVAssociateForm
 
-class CSVForm(forms.ModelForm):
-    class Meta:
-        model = CSV
-    exclude_types = getattr(settings, 'CSVIMPORTER_EXCLUDE', [])
-    # TODO: this could be so much nicer.
-    content_types = ContentType.objects.all()
-    for t in exclude_types:
-        if '.' in t:
-            content_types = content_types.exclude(app_label__iexact=t.split('.')[0], model__iexact=t.split('.')[1].lower())
-        else:
-            content_types = content_types.exclude(app_label__iexact=t)
-    content_type = forms.ModelChoiceField(queryset=content_types)
+@csrf_exempt
+@staff_member_required
+def csv_list(request):
+    return object_list(request, queryset=CSV.objects.all(), template_name='csv_list.html', template_object_name='csv')
+
+@csrf_exempt
+@staff_member_required
+def associate(request, object_id):
+    instance = get_object_or_404(CSV, pk=object_id)
+    if request.method == 'POST':
+        form = CSVAssociateForm(instance, request.POST)
+        if form.is_valid():
+            form.save(request)
+            request.user.message_set.create(message='CSV imported.')
+            return HttpResponseRedirect(reverse('csv-list'))
+    else:
+        form = CSVAssociateForm(instance)
+    return object_detail(request,
+        queryset=CSV.objects.all(),
+        object_id=object_id,
+        template_name='csv_detail.html',
+        template_object_name='csv',
+        extra_context={
+            'form':form,
+        })
     
-key_to_field_map = getattr(settings, 'CSVIMPORTER_KEY_TO_FIELD_MAP', lambda k: k.replace(' ','_').lower())
-class CSVAssociateForm(forms.Form):
-    def __init__(self, instance, *args, **kwargs):
-        self.instance = instance
-        lines = instance.csv_file.file.readlines()
-        # this removes trailing spaces in the header rows - otherwise, things get weird.
-        lines[0] = re.sub('\s+,', ',', lines[0])
-        self.reader = csv.DictReader(lines)
-        self.reader.next()
-        self.klass = self.instance.content_type.model_class()
-        choices = [(None,'---- (None)')] + [(f.name, f.name) for f in self.klass._meta.fields]
-        # self.base_fields gets copied over to create self.fields in __init__
-        self.base_fields = {}
-        for field_name in self.reader.fieldnames:
-            self.base_fields[field_name] = forms.ChoiceField(choices=choices, required=False)
-            if key_to_field_map(field_name) in [f.name for f in self.klass._meta.fields]:
-                self.base_fields[field_name].initial = key_to_field_map(field_name)
-        super(CSVAssociateForm, self).__init__(*args, **kwargs)
-        
-    def save(self, request):
-        # these are out here because we only need to retreive them from settings the once.
-        transforms = getattr(settings, 'CSVIMPORTER_DATA_TRANSFORMS', {})
-        for row in self.reader:
-            data = {}
-            for field_name in self.reader.fieldnames:
-                data[self.cleaned_data[field_name]] = row[field_name]
-            transform_key = '%s.%s' % (self.instance.content_type.app_label, self.instance.content_type.model)
-            data = transforms.get(transform_key, lambda r, d: d)(request, data)
-            new_obj = self.klass()
-            for key in data.keys():
-                setattr(new_obj, key, data[key])
-            new_obj.save()
-        self.instance.delete()
+@csrf_exempt
+@staff_member_required
+def new(request):
+    if request.method == 'POST':
+        form = CSVForm(request.POST, request.FILES)
+        if form.is_valid():
+            instance = form.save()
+            request.user.message_set.create(message='Uploaded CSV. Please associate fields below.')
+            return HttpResponseRedirect(reverse('associate-csv',args=[instance.id]))
+    else:
+        form = CSVForm()
+    return render_to_response('new.html',
+        {'form':form}, context_instance=RequestContext(request))
