@@ -5,6 +5,7 @@ from django.shortcuts import render_to_response, get_object_or_404
 from django.core.files.base import ContentFile
 from django.template import RequestContext
 from django.contrib.admin.views.decorators import staff_member_required
+from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.core.urlresolvers import reverse
 from django.views.generic.list_detail import object_list, object_detail
@@ -12,10 +13,12 @@ from django.views.generic.list_detail import object_list, object_detail
 from csvimporter.models import CSV
 from csvimporter.forms import CSVForm, CSVAssociateForm
 
+@csrf_exempt
 @staff_member_required
 def csv_list(request):
     return object_list(request, queryset=CSV.objects.all(), template_name='csv_list.html', template_object_name='csv')
 
+@csrf_exempt
 @staff_member_required
 def associate(request, object_id):
     instance = get_object_or_404(CSV, pk=object_id)
@@ -36,6 +39,7 @@ def associate(request, object_id):
             'form':form,
         })
     
+@csrf_exempt
 @staff_member_required
 def new(request):
     if request.method == 'POST':
